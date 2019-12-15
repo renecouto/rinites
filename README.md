@@ -3,7 +3,7 @@
 kinesis copy, to learn a bit about low level threading in rust
 
 # Features
-basically nothing
+![You can request to read data from a file lol](img/rinites_udp.png)
 
 # TO DO
 `in this todo: partition == file`
@@ -13,3 +13,4 @@ basically nothing
 - I need some logic to index by timestamp or sequencenumber like kinesis does. lookup table?
 - Use an async runtime with async locks and a real http server (actix-web, probably)
 - Delete old partitions
+
