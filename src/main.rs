@@ -114,9 +114,9 @@ enum ShardIteratorType {
 
 
 enum Request {
-    ShardIteratorRequest(ShardIteratorType),
-    GetRecordsRequest(u64),
-    PutRecordsRequest(Vec<u8>)
+    GetShardIterator(ShardIteratorType),
+    GetRecords(u64),
+    PutRecords(Vec<u8>)
 }
 
 struct UdpServer {
@@ -138,15 +138,21 @@ impl UdpServer {
         let request = std::str::from_utf8(filled_buf).map_err(|x| x.to_string())?;
         let mut request_split: Vec<&str> = request.split_whitespace().collect();
         match request_split[..] {
-            ["ShardIteratorRequest", "Latest"] => Ok((Some(Request::ShardIteratorRequest(ShardIteratorType::Latest)), src_addr)),
-            ["ShardIteratorRequest", "Oldest"] => Ok((Some(Request::ShardIteratorRequest(ShardIteratorType::Oldest)), src_addr)),
-            ["GetRecordsRequest", x] => {
+            ["GetShardIterator", "Latest"] => Ok((Some(Request::GetShardIterator(ShardIteratorType::Latest)), src_addr)),
+            ["GetShardIterator", "Oldest"] => Ok((Some(Request::GetShardIterator(ShardIteratorType::Oldest)), src_addr)),
+            ["GetRecords", x] => {
                 let shit: u64  = x.parse().map_err(|err: ParseIntError| err.to_string())?;
-                Ok((Some(Request::GetRecordsRequest(shit)), src_addr))
+                Ok((Some(Request::GetRecords(shit)), src_addr))
             },
-            ["PutRecordsRequest", base64_stuff] => {
-                let records: Vec<u8>   = base64_stuff.as_bytes().to_vec();
-                Ok((Some(Request::PutRecordsRequest(records)), src_addr))
+            ["PutRecords", base64_stuff] => {
+                match base64::decode(base64_stuff) {
+                    Err(e) => Err("invalid data. It must be base64 encoded".to_string()),
+                    Ok(_) => {
+                        let records: Vec<u8>   = base64_stuff.as_bytes().to_vec();
+                        Ok((Some(Request::PutRecords(records)), src_addr))
+                    }
+                }
+
             },
             [] => Ok((None, src_addr)),
             _ => Err("invalid request".to_string())
@@ -159,7 +165,7 @@ struct Response(String);
 
 fn handle_request(p_shard_id: ProtectedShardId, request: Request) -> Result<Response, String> {
     match request {
-        Request::GetRecordsRequest(shit) => {
+        Request::GetRecords(shit) => {
             let mut reader: ShardReader = ShardReader { p_shard_id, offset: shit, chunk_size: 10 };
             let records: Vec<Record> = reader.read().unwrap();
             println!("read {} records", records.len());
@@ -172,25 +178,25 @@ fn handle_request(p_shard_id: ProtectedShardId, request: Request) -> Result<Resp
             }
 
         },
-        Request::ShardIteratorRequest(ShardIteratorType::Latest) => {
+        Request::GetShardIterator(ShardIteratorType::Latest) => {
             let mut reader: ShardReader = ShardReader { p_shard_id, offset: 0, chunk_size: 10 };
             let shit = reader.get_end_offset();
             let result = Response(format!("shard iterator: {}", shit));
             Ok(result)
         },
-        Request::ShardIteratorRequest(ShardIteratorType::Oldest) => {
+        Request::GetShardIterator(ShardIteratorType::Oldest) => {
             let result = Response("shard iterator: 0".to_string());
             Ok(result)
         },
-        Request::PutRecordsRequest(record) => {
+        Request::PutRecords(record) => {
             let mut writer = ShardWriter::from_shard(p_shard_id);
             writer.append(&record).map_err(|x| x.to_string()).map(|nothing| Response("data was written!!!".to_string()))
         }
     }
 }
 
-
-fn main() {
+// single-thread with udp server
+fn main3() {
     let udp_server = UdpServer::default();
     let shard_id = ShardId("/home/pessoal/code/rinites/samples/1".to_string());
     let p_shard_id = Arc::new(Mutex::new(shard_id));
@@ -205,14 +211,56 @@ fn main() {
             Err(s) => {dbg!(s);},
             _ => ()
         }
-
-
     }
-
 }
 
 
+// multi-threaded with udp server
 
+fn main() {
+    let udp_server = Arc::new(Mutex::new(UdpServer::default()));
+    let shard_id = ShardId("/home/pessoal/code/rinites/samples/1".to_string());
+    let p_shard_id = Arc::new(Mutex::new(shard_id));
+    let mut threads = Vec::new();
+    for n in 0..8 {
+        let udp_server = udp_server.clone();
+        let p_shard_id = p_shard_id.clone();
+        let x = thread::spawn(move || {
+            println!("started thread {}", n);
+
+            loop {
+                let res = {
+                    let udp_s = udp_server.lock().unwrap();
+                    println!("got lock of udp server on thread {}", n);
+                    udp_s.poll_request()
+                };
+                match res {
+                    Ok((Some(req), addr)) => {
+
+                        let response = handle_request(p_shard_id.clone(), req).unwrap();
+                        dbg!(&response);
+                        println!("waiting for udp lock on thead {}", n);
+                        let udp_s = udp_server.lock().unwrap();
+                        println!("got udp lock on thead {}", n);
+                        udp_s.socket.send_to(response.0.as_bytes(), addr);
+                    },
+                    Err(s) => { dbg!(s); },
+                    _ => ()
+                }
+            }
+        });
+        threads.push(x);
+    }
+
+    for x in threads {
+        x.join().unwrap();
+    }
+
+    println!("exited");
+
+}
+
+// threaded POC
 fn main2() -> std::io::Result<()> {
     let UdpServer = UdpServer::default();
     let shard_id = ShardId("/home/pessoal/code/rinites/samples/1".to_string());
@@ -225,8 +273,6 @@ fn main2() -> std::io::Result<()> {
 
     my_writer.append(data)?;
 
-//    let mut my_reader_1 = ShardReader { p_shard_id: ProtectedShardId(p_shard_id.clone()), offset: 0, chunk_size: 10 };
-//    let mut my_reader_2 = ShardReader { p_shard_id: ProtectedShardId(p_shard_id.clone()), offset: 138, chunk_size: 10 };
     let mut threads = Vec::new();
     for n in 0..5 {
         let mut reader: ShardReader = ShardReader { p_shard_id: p_shard_id.clone(), offset: 0, chunk_size: 10 };
