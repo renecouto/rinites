@@ -33,10 +33,14 @@ struct ShardReader {
     pub chunk_size: usize
 }
 
-fn build_record(data: &[u8]) -> Record {
-    let mut line = base64::encode(&data);
-    line.push_str("\n");
-    Record(line.into_bytes())
+fn build_record(base64_data: &[u8]) -> Record {
+    let mut res = Vec::with_capacity(base64_data.len() + 1);
+    base64_data.iter().for_each(|b| res.push(b.clone()));
+//    res.clone_from_slice(&base64_data);
+    res.push(b'\n');
+//    let mut line = std::str::from_utf8(base64_data);
+//    line.push_str("\n");
+    Record(res)
 }
 
 impl ShardWriter {
@@ -81,12 +85,12 @@ impl ShardReader {
             self.offset += added_offset as u64;
 
             if b.ends_with('\n') {
+                println!("removed trailing newline");
                 b.pop();
             }
 //            dbg!(&b);
-            let decoded = base64::decode(&b).unwrap();
 
-            res.push(Record(decoded));
+            res.push(Record(b.as_bytes().to_vec()));
 //            dbg!(&res);
             if res.len() > self.chunk_size {
                 return Ok(res)
@@ -111,7 +115,8 @@ enum ShardIteratorType {
 
 enum Request {
     ShardIteratorRequest(ShardIteratorType),
-    GetRecordsRequest(u64)
+    GetRecordsRequest(u64),
+    PutRecordsRequest(Vec<u8>)
 }
 
 struct UdpServer {
@@ -131,13 +136,17 @@ impl UdpServer {
         let filled_buf = &mut buf[..number_of_bytes];
 
         let request = std::str::from_utf8(filled_buf).map_err(|x| x.to_string())?;
-        let request_split: Vec<&str> = request.split_whitespace().collect();
+        let mut request_split: Vec<&str> = request.split_whitespace().collect();
         match request_split[..] {
             ["ShardIteratorRequest", "Latest"] => Ok((Some(Request::ShardIteratorRequest(ShardIteratorType::Latest)), src_addr)),
             ["ShardIteratorRequest", "Oldest"] => Ok((Some(Request::ShardIteratorRequest(ShardIteratorType::Oldest)), src_addr)),
             ["GetRecordsRequest", x] => {
                 let shit: u64  = x.parse().map_err(|err: ParseIntError| err.to_string())?;
                 Ok((Some(Request::GetRecordsRequest(shit)), src_addr))
+            },
+            ["PutRecordsRequest", base64_stuff] => {
+                let records: Vec<u8>   = base64_stuff.as_bytes().to_vec();
+                Ok((Some(Request::PutRecordsRequest(records)), src_addr))
             },
             [] => Ok((None, src_addr)),
             _ => Err("invalid request".to_string())
@@ -159,7 +168,7 @@ fn handle_request(p_shard_id: ProtectedShardId, request: Request) -> Result<Resp
                 Ok(Response(format!("no more records remaining. offset was: {}", reader.offset)))
             } else {
                 let text: Vec<&str> = records.iter().map(|r| std::str::from_utf8(&r.0).unwrap()).collect();
-                Ok(Response(format!("next shard iterator: {}, text: {:?}",reader.offset, text)))
+                Ok(Response(format!("next shard iterator: {}, records: {:?}",reader.offset, text)))
             }
 
         },
@@ -172,9 +181,14 @@ fn handle_request(p_shard_id: ProtectedShardId, request: Request) -> Result<Resp
         Request::ShardIteratorRequest(ShardIteratorType::Oldest) => {
             let result = Response("shard iterator: 0".to_string());
             Ok(result)
+        },
+        Request::PutRecordsRequest(record) => {
+            let mut writer = ShardWriter::from_shard(p_shard_id);
+            writer.append(&record).map_err(|x| x.to_string()).map(|nothing| Response("data was written!!!".to_string()))
         }
     }
 }
+
 
 fn main() {
     let udp_server = UdpServer::default();
