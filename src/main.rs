@@ -6,6 +6,9 @@ use std::io::BufReader;
 use base64;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::net::{UdpSocket, SocketAddr};
+use std::fmt::UpperExp;
+use std::num::ParseIntError;
 
 #[derive(Debug)]
 struct Record(Vec<u8>);
@@ -91,12 +94,113 @@ impl ShardReader {
         }
     }
 
+    fn get_end_offset(&self) -> u64 {
+        let shard_id = &self.p_shard_id.lock().unwrap();
+
+        let f = File::open(&shard_id.0).unwrap();
+        let mut reader = BufReader::new(f);
+        reader.seek(SeekFrom::End(0)).unwrap()
+    }
+
+}
+enum ShardIteratorType {
+    Latest,
+    Oldest
+}
+
+
+enum Request {
+    ShardIteratorRequest(ShardIteratorType),
+    GetRecordsRequest(u64)
+}
+
+struct UdpServer {
+    socket: UdpSocket
+}
+
+impl UdpServer {
+    fn default() -> Self {
+        let socket = UdpSocket::bind("127.0.0.1:3400").expect("couldn't bind to address");
+        UdpServer { socket }
+    }
+
+    fn poll_request(&self) -> Result<(Option<Request>, SocketAddr), String> {
+        let mut buf = [0; 500];
+        let (number_of_bytes, src_addr) = self.socket.recv_from(&mut buf).expect("Didn't receive data");
+
+        let filled_buf = &mut buf[..number_of_bytes];
+
+        let request = std::str::from_utf8(filled_buf).map_err(|x| x.to_string())?;
+        let request_split: Vec<&str> = request.split_whitespace().collect();
+        match request_split[..] {
+            ["ShardIteratorRequest", "Latest"] => Ok((Some(Request::ShardIteratorRequest(ShardIteratorType::Latest)), src_addr)),
+            ["ShardIteratorRequest", "Oldest"] => Ok((Some(Request::ShardIteratorRequest(ShardIteratorType::Oldest)), src_addr)),
+            ["GetRecordsRequest", x] => {
+                let shit: u64  = x.parse().map_err(|err: ParseIntError| err.to_string())?;
+                Ok((Some(Request::GetRecordsRequest(shit)), src_addr))
+            },
+            [] => Ok((None, src_addr)),
+            _ => Err("invalid request".to_string())
+        }
+    }
+}
+
+#[derive(Debug)]
+struct Response(String);
+
+fn handle_request(p_shard_id: ProtectedShardId, request: Request) -> Result<Response, String> {
+    match request {
+        Request::GetRecordsRequest(shit) => {
+            let mut reader: ShardReader = ShardReader { p_shard_id, offset: shit, chunk_size: 10 };
+            let records: Vec<Record> = reader.read().unwrap();
+            println!("read {} records", records.len());
+
+            if records.len() == 0 {
+                Ok(Response(format!("no more records remaining. offset was: {}", reader.offset)))
+            } else {
+                let text: Vec<&str> = records.iter().map(|r| std::str::from_utf8(&r.0).unwrap()).collect();
+                Ok(Response(format!("next shard iterator: {}, text: {:?}",reader.offset, text)))
+            }
+
+        },
+        Request::ShardIteratorRequest(ShardIteratorType::Latest) => {
+            let mut reader: ShardReader = ShardReader { p_shard_id, offset: 0, chunk_size: 10 };
+            let shit = reader.get_end_offset();
+            let result = Response(format!("shard iterator: {}", shit));
+            Ok(result)
+        },
+        Request::ShardIteratorRequest(ShardIteratorType::Oldest) => {
+            let result = Response("shard iterator: 0".to_string());
+            Ok(result)
+        }
+    }
+}
+
+fn main() {
+    let udp_server = UdpServer::default();
+    let shard_id = ShardId("/home/pessoal/code/rinites/samples/1".to_string());
+    let p_shard_id = Arc::new(Mutex::new(shard_id));
+    loop {
+        match udp_server.poll_request() {
+            Ok((Some(req), addr)) => {
+                let response = handle_request(p_shard_id.clone(), req).unwrap();
+                dbg!(&response);
+
+                udp_server.socket.send_to(response.0.as_bytes(), addr);
+            },
+            Err(s) => {dbg!(s);},
+            _ => ()
+        }
+
+
+    }
+
 }
 
 
 
-
-fn main() -> std::io::Result<()> {
+fn main2() -> std::io::Result<()> {
+    let UdpServer = UdpServer::default();
     let shard_id = ShardId("/home/pessoal/code/rinites/samples/1".to_string());
     let p_shard_id = Arc::new(Mutex::new(shard_id));
 
@@ -137,19 +241,6 @@ fn main() -> std::io::Result<()> {
     for x in threads {
         x.join().unwrap();
     }
-
-
-//    loop {
-//
-//        let records = my_reader_1.read()?;
-//        if records.len() == 0 {
-//            println!("no more records remaining. offset was: {}", my_reader_1.offset);
-//            return Ok(())
-//        }
-//        let text: Vec<&str> = records.iter().map(|r| std::str::from_utf8(&r.0).unwrap()).collect();
-//        dbg!(text);
-//
-//    }
 
     Ok(())
 }
