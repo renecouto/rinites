@@ -244,11 +244,25 @@ fn start_shard_workers(
     threads
 }
 
+
+use structopt::StructOpt;
+//use std::time::Instant;
+
+/// Rinites
+#[derive(StructOpt, Debug)]
+#[structopt(name = "basic")]
+struct Opts {
+    #[structopt(short, long)]
+    mount_path: String,
+}
+
 // multi-threaded with udp server on a single thread
 
 fn main() {
+    let opts: Opts = Opts::from_args();
+    let shard_id_path = format!("{}/1", opts.mount_path);
     let udp_server = UdpServer::default();
-    let shard_id = ShardId("/home/pessoal/code/rinites/samples/1".to_string());
+    let shard_id = ShardId(shard_id_path);
     let p_shard_id = Arc::new(Mutex::new(shard_id));
 
 
@@ -259,8 +273,6 @@ fn main() {
     let (response_tx, response_rx) = channel();
 
     let threads = start_shard_workers(p_shard_id, task_rx, response_tx);
-
-
 
     loop {
         match udp_server.poll_request() {
