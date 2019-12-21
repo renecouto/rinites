@@ -15,7 +15,7 @@ use std::thread::JoinHandle;
 
 mod udp_server;
 mod shards;
-use shards::{ ShardId, ProtectedShardId, start_shard_workers };
+use shards::{ ShardId, start_shard_workers };
 use udp_server::*;
 
 
@@ -27,6 +27,7 @@ pub struct Response(String);
 
 use structopt::StructOpt;
 use crate::shards::ShardDir;
+use std::path::Path;
 
 /// Rinites
 #[derive(StructOpt, Debug)]
@@ -43,7 +44,7 @@ fn main() {
     let udp_server = UdpServer::default();
 
 
-    let shard_dir = ShardDir { mount_dir: opts.mount_path };
+    let shard_dir = ShardDir { mount_dir: Path::new(    &opts.mount_path).to_path_buf() };
 
 
     let (task_tx, rx) = channel();
