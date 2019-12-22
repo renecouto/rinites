@@ -26,32 +26,22 @@ impl Record {
 
 
 
-
-// We use an Arc to distribute the references with other threads, we use a mutex to make it so only one thread ever has acces to the file each time
-//pub type ProtectedShardId = Arc<Mutex<ShardId>>;
-pub type ShardId = u64;
+pub type SegmentId = u64;
 
 type ShardOffset = u64;
-// This is very strange, since it can be thought of as the shard iterator a client uses for a request
-pub struct ShardReader {
-    pub shard_id: ShardId,
-    pub latest_shard: usize,
-    pub offset: ShardOffset,
-    pub chunk_size: usize,
-    pub shard_dir: ShardDir
-}
+
 
 
 pub struct ShardWriter {
-    pub latest_shard: Arc<AtomicUsize>,
+    pub latest_segment: Arc<AtomicUsize>,
     pub shard_dir: ShardDir,
     pub offset: ShardOffset,
-    pub max_shard_size: u64
+    pub max_segment_size: u64
 }
 
 impl ShardWriter {
 
-    pub fn append(&mut self, data: &[u8]) -> std::io::Result<()> {
+    pub fn write(&mut self, record: &Record) -> std::io::Result<()> {
 
 
         let mut file = OpenOptions::new()
@@ -59,13 +49,13 @@ impl ShardWriter {
             .truncate(false)
             .write(true)
             .append(true)
-            .open(self.shard_dir.path_to_shard(self.latest_shard.load(Ordering::Relaxed) as u64)).expect("could not open file to append");
-        let record = Record::from(data);
+            .open(self.shard_dir.path_to_segment(self.latest_segment.load(Ordering::Relaxed) as u64)).expect("could not open file to append");
+
         let written = file.write(&record.0)?;
         self.offset += written as u64;
-        if self.offset > self.max_shard_size {
-            let old_size = self.latest_shard.load(Ordering::Relaxed);
-            self.latest_shard.store(self.offset as usize + old_size, Ordering::Relaxed);
+        if self.offset > self.max_segment_size {
+            let old_size = self.latest_segment.load(Ordering::Relaxed);
+            self.latest_segment.store(self.offset as usize + old_size, Ordering::Relaxed);
             self.offset = 0;
             println!("releasing lock for new partition");
         }
@@ -75,10 +65,19 @@ impl ShardWriter {
 
 }
 
+pub struct ShardReader {
+    pub segment_id: SegmentId,
+    pub latest_shard: usize,
+    pub offset: ShardOffset,
+    pub chunk_size: usize,
+    pub shard_dir: ShardDir
+}
+
 impl ShardReader {
+    // FIXME this will read a partially written line
     pub fn read(&mut self) -> std::io::Result<Vec<Record>>  {
 
-        let path = self.shard_dir.path_to_shard(self.shard_id);
+        let path = self.shard_dir.path_to_segment(self.segment_id);
 
         dbg!(&path);
 
@@ -92,8 +91,9 @@ impl ShardReader {
         loop {
             let mut b = String::new();
             let added_offset = reader.read_line(&mut b)?;
-            if added_offset == 0 && self.shard_id < (self.latest_shard as u64) {
-                f = File::open(self.shard_dir.path_to_shard(self.shard_id + self.offset)).unwrap();
+
+            if added_offset == 0 && self.segment_id < (self.latest_shard as u64) {
+                f = File::open(self.shard_dir.path_to_segment(self.segment_id + self.offset)).unwrap();
                 reader = BufReader::new(f);
                 continue
             }
@@ -120,19 +120,13 @@ pub struct ShardDir {
     pub mount_dir: PathBuf
 }
 
-#[derive(Debug)]
-enum Shard {
-    Latest,
-    Old((String, u64))
-}
-
 impl ShardDir {
 
-    fn path_to_shard(&self, shard_id: ShardId) -> PathBuf {
-        self.mount_dir.join(format!("{:08}",shard_id))
+    fn path_to_segment(&self, shard_id: SegmentId) -> PathBuf {
+        self.mount_dir.join(format!("{:08}.rinites",shard_id))
     }
 
-    fn get_latest_shard(&self) -> ShardId {
+    fn get_latest_segment(&self) -> SegmentId {
         let paths = fs::read_dir(&self.mount_dir).unwrap();
 
         let path = paths
@@ -146,7 +140,7 @@ impl ShardDir {
         path.expect("missing shards!!!!!! none found").parse().expect("file not in shard format1111")
     }
 
-    fn get_oldest_shard(&self) -> ShardId {
+    fn get_oldest_shard(&self) -> SegmentId {
         let paths = fs::read_dir(&self.mount_dir).unwrap();
 
         let path = paths.map(|p| p.unwrap().file_name().into_string().unwrap()).min();
@@ -154,7 +148,7 @@ impl ShardDir {
         path.expect("missing shards!!!!!! none found").parse().expect("not in shard style")
     }
 
-    fn find_belonging_shard(&self, shit: u64) -> (ShardId, ShardOffset) {
+    fn find_belonging_segment(&self, shit: u64) -> (SegmentId, ShardOffset) {
 
         let paths = fs::read_dir(&self.mount_dir).unwrap();
         dbg!(&paths);
@@ -178,8 +172,8 @@ impl ShardDir {
         (candidate_shard_id, candidate_shard_id_offset as u64)
     }
 
-    fn create_first_partition(&self) {
-        let path = self.path_to_shard(0);
+    fn create_first_segment(&self) {
+        let path = self.path_to_segment(0);
         dbg!(&path);
         File::create(&path).expect(&format!("could not create file {}", &path.to_string_lossy()));
     }
@@ -189,24 +183,26 @@ impl ShardDir {
             panic!("mount path exists and is not a directory")
         }
 
-        println!("creating mounting dir in {}", &self.mount_dir.to_string_lossy());
-        fs::create_dir(&self.mount_dir);
+        if !self.mount_dir.exists() {
+            println!("creating mounting dir in {}", &self.mount_dir.to_string_lossy());
+            fs::create_dir(&self.mount_dir);
+        }
 
-        let paths = fs::read_dir(&self.mount_dir).unwrap();
+        let paths = fs::read_dir(&self.mount_dir).expect("Could not read dir entries");
         let valid_paths: Vec<DirEntry> = paths.map(|x| x.expect("invalid record")).collect();
         match valid_paths.len() {
             0 => {
-                println!("about to create first partition");
-                self.create_first_partition()
+                println!("about to create first segment");
+                self.create_first_segment()
             },
-            x => println!("all is ok, found partitions"),
+            x => println!("all is ok, found segment"),
 
         }
     }
 
-    pub fn get_end_offset(&self, shard_id: &ShardId) -> u64 {
+    pub fn get_end_offset(&self, shard_id: &SegmentId) -> u64 {
 
-        let f = File::open(self.path_to_shard(*shard_id)).unwrap();
+        let f = File::open(self.path_to_segment(*shard_id)).unwrap();
         let mut reader = BufReader::new(f);
         reader.seek(SeekFrom::End(0)).unwrap()
     }
@@ -220,18 +216,18 @@ pub fn start_shard_workers(
 ) -> Vec<JoinHandle<()>> {
 
     shard_dir.assert_mount_path();
-    let latest_shard = shard_dir.get_latest_shard();
+    let latest_shard = shard_dir.get_latest_segment();
     let latest_shard_offset = shard_dir.get_end_offset(&latest_shard);
 
-    let latest_shard: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(latest_shard as usize));
-    let shard_writer = ShardWriter { latest_shard: latest_shard.clone(), shard_dir: shard_dir.clone(), offset: latest_shard_offset , max_shard_size: 1000000000 };
-    let latest_shard_writer = Arc::new(Mutex::new(shard_writer));
+    let latest_segment: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(latest_shard as usize));
+    let shard_writer = ShardWriter { latest_segment: latest_segment.clone(), shard_dir: shard_dir.clone(), offset: latest_shard_offset , max_segment_size: 100 };
+    let shard_writer = Arc::new(Mutex::new(shard_writer));
 
 
     let mut threads = Vec::new();
     for n in 0..8 {
-        let latest_shard_writer = latest_shard_writer.clone();
-        let latest_shard = latest_shard.clone();
+        let shard_writer = shard_writer.clone();
+        let latest_segment = latest_segment.clone();
 
         let task_rx = task_rx.clone();
         let response_tx = response_tx.clone();
@@ -248,7 +244,7 @@ pub fn start_shard_workers(
                 };
 
                 println!("got req in thread {}", n);
-                let response = handle_request(&latest_shard_writer, &latest_shard, &shard_dir, req).unwrap();
+                let response = handle_request(&shard_writer, &latest_segment, &shard_dir, req).unwrap();
                 dbg!(&response);
                 println!("sending from thread {}", n);
                 if let Err(e) = response_tx.send((response, addr)) {
@@ -264,17 +260,23 @@ pub fn start_shard_workers(
     threads
 }
 
+fn assert_recordable(data: &[u8]) -> Result<(), String> {
+    let xxx = std::str::from_utf8(&data).map_err(|x|"data was not utf-8 valid".to_string())?;
+    base64::decode(xxx).map_err(|x|"input ws not base64".to_string())?;
+    Ok(())
+}
+
 /// last_shard_id and last_shard_id_offset as atomic OR last_sequence_number as atomic.
 /// i dont need lock on read, but i have to keep track of the offset of the last stable line. stable meaning it is not being written to
 /// benchmark
 /// use arc for shard dir
-pub fn handle_request(latest_shard_writer: &Arc<Mutex<ShardWriter>>, latest_shard: &Arc<AtomicUsize>, shard_dir: &ShardDir ,request: Request) -> Result<Response, String> {
+pub fn handle_request(shard_writer: &Arc<Mutex<ShardWriter>>, latest_segment: &Arc<AtomicUsize>, shard_dir: &ShardDir ,request: Request) -> Result<Response, String> {
     match request {
         Request::GetRecords(shit) => {
             let shard_dir = shard_dir.clone();
-            let (shard_id, offset): (ShardId, ShardOffset) = shard_dir.find_belonging_shard(shit);
+            let (shard_id, offset): (SegmentId, ShardOffset) = shard_dir.find_belonging_segment(shit);
             // FIXME do maths to figure out offset
-            let mut reader: ShardReader = ShardReader { shard_id: shard_id, offset: offset, chunk_size: 10, shard_dir: shard_dir, latest_shard: latest_shard.load(Ordering::Relaxed) };
+            let mut reader: ShardReader = ShardReader { segment_id: shard_id, offset: offset, chunk_size: 10, shard_dir: shard_dir, latest_shard: latest_segment.load(Ordering::Relaxed) };
             let records: Vec<Record> = reader.read().unwrap();
             println!("read {} records", records.len());
 
@@ -287,7 +289,7 @@ pub fn handle_request(latest_shard_writer: &Arc<Mutex<ShardWriter>>, latest_shar
 
         },
         Request::GetShardIterator(ShardIteratorType::Latest) => {
-            let shit = shard_dir.get_latest_shard();
+            let shit = shard_dir.get_latest_segment();
             let result = Response(format!("shard iterator: {}", shit));
             Ok(result)
         },
@@ -297,8 +299,13 @@ pub fn handle_request(latest_shard_writer: &Arc<Mutex<ShardWriter>>, latest_shar
             Ok(result)
         },
         Request::PutRecords(record) => {
-            let mut writer = latest_shard_writer.lock().unwrap();
-            writer.append(&record).map_err(|x| x.to_string()).map(|nothing| Response("data was written!!!".to_string()))
+
+            assert_recordable(&record)?;
+            let mut yyy = record;
+            yyy.push(b'\n');
+
+            let mut writer = shard_writer.lock().unwrap();
+            writer.write(&Record(yyy)).map_err(|x| x.to_string()).map(|nothing| Response("data was written!!!".to_string()))
         }
     }
 }

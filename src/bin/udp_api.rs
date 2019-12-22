@@ -3,6 +3,7 @@ use std::fs::{OpenOptions, File};
 use std::io::{Write, Seek, BufRead};
 use std::io::SeekFrom;
 use std::io::BufReader;
+use std::path::Path;
 use base64;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -13,21 +14,15 @@ use std::sync::mpsc::{channel, Sender, Receiver};
 use std::time::Duration;
 use std::thread::JoinHandle;
 
-mod udp_server;
-mod shards;
-use shards::{ ShardId, start_shard_workers };
-use udp_server::*;
-
-
-#[derive(Debug)]
-pub struct Response(String);
-
-
-
 
 use structopt::StructOpt;
-use crate::shards::ShardDir;
-use std::path::Path;
+
+
+use rinites::shards::{SegmentId, ShardDir, start_shard_workers };
+use rinites::udp_server::*;
+use rinites::Response;
+
+
 
 /// Rinites
 #[derive(StructOpt, Debug)]

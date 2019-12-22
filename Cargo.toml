@@ -3,8 +3,16 @@ name = "rinites"
 version = "0.1.0"
 authors = ["csrene <renecoutoesilva@gmail.com>"]
 edition = "2018"
-default-run = "rinites"
+default-run = "udp_api"
 
 [dependencies]
 base64 = "0.2.1"
 structopt = "0.3"
+#
+#[[bin]]
+#name = "benchmark"
+#path = "src/bin/benchmark.rs"
+#
+#[[bin]]
+#name = "udp_api"
+#path = "src/bin/udp_api.rs"
