@@ -1,28 +1,24 @@
-use std::ops::Deref;
-use std::fs::{OpenOptions, File};
-use std::io::{Write, Seek, BufRead};
-use std::io::SeekFrom;
-use std::io::BufReader;
-use std::path::Path;
 use base64;
+use std::fmt::UpperExp;
+use std::fs::{File, OpenOptions};
+use std::io::BufReader;
+use std::io::SeekFrom;
+use std::io::{BufRead, Seek, Write};
+use std::net::{SocketAddr, UdpSocket};
+use std::num::ParseIntError;
+use std::ops::Deref;
+use std::path::Path;
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::net::{UdpSocket, SocketAddr};
-use std::fmt::UpperExp;
-use std::num::ParseIntError;
-use std::sync::mpsc::{channel, Sender, Receiver};
-use std::time::Duration;
 use std::thread::JoinHandle;
-
+use std::time::Duration;
 
 use structopt::StructOpt;
 
-
-use rinites::shards::{SegmentId, ShardDir, start_shard_workers };
+use rinites::shards::{start_shard_workers, SegmentId, ShardDir};
 use rinites::udp_server::*;
 use rinites::Response;
-
-
 
 /// Rinites
 #[derive(StructOpt, Debug)]
@@ -38,9 +34,9 @@ fn main() {
     let opts: Opts = Opts::from_args();
     let udp_server = UdpServer::default();
 
-
-    let shard_dir = ShardDir { mount_dir: Path::new(    &opts.mount_path).to_path_buf() };
-
+    let shard_dir = ShardDir {
+        mount_dir: Path::new(&opts.mount_path).to_path_buf(),
+    };
 
     let (task_tx, rx) = channel();
 
@@ -54,23 +50,16 @@ fn main() {
         match udp_server.poll_request() {
             Some(Ok((Some(req), addr))) => {
                 task_tx.send((req, addr));
-            },
+            }
             Some(Err((s, addr))) => {
                 udp_server.socket.send_to(s.as_bytes(), addr);
                 dbg!(s);
-            },
-            _ => ()
+            }
+            _ => (),
         }
 
         if let Ok((response, addr)) = response_rx.try_recv() {
             udp_server.socket.send_to(response.0.as_bytes(), addr);
         }
     }
-
-    for x in threads {
-        x.join().unwrap();
-    }
-
-    println!("exited");
-
 }
