@@ -285,9 +285,9 @@ pub fn handle_request(
 
             let mut reader: ShardReader = ShardReader {
                 segment_id: shard_id,
-                offset: offset,
+                offset,
                 chunk_size: 10,
-                shard_dir: shard_dir,
+                shard_dir,
                 latest_shard: latest_segment.load(Ordering::Relaxed),
             };
             let records: Vec<Record> = reader.read().unwrap();
