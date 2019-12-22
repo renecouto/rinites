@@ -1,24 +1,24 @@
-use base64;
-use std::fmt::UpperExp;
-use std::fs::{File, OpenOptions};
-use std::io::BufReader;
-use std::io::SeekFrom;
-use std::io::{BufRead, Seek, Write};
-use std::net::{SocketAddr, UdpSocket};
-use std::num::ParseIntError;
-use std::ops::Deref;
+
+
+
+
+
+
+
+
+
 use std::path::Path;
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{channel};
 use std::sync::{Arc, Mutex};
-use std::thread;
-use std::thread::JoinHandle;
-use std::time::Duration;
+
+
+
 
 use structopt::StructOpt;
 
-use rinites::shards::{start_shard_workers, SegmentId, ShardDir};
+use rinites::shards::{start_shard_workers, ShardDir};
 use rinites::udp_server::*;
-use rinites::Response;
+
 
 /// Rinites
 #[derive(StructOpt, Debug)]
@@ -44,7 +44,7 @@ fn main() {
 
     let (response_tx, response_rx) = channel();
 
-    let threads = start_shard_workers(shard_dir, task_rx, response_tx);
+    let _threads = start_shard_workers(shard_dir, task_rx, response_tx);
 
     loop {
         match udp_server.poll_request() {

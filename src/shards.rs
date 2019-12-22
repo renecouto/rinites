@@ -5,7 +5,7 @@ use std::io::BufReader;
 use std::io::SeekFrom;
 use std::io::{BufRead, Seek, Write};
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::{PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -199,7 +199,7 @@ impl ShardDir {
                 println!("about to create first segment");
                 self.create_first_segment()
             }
-            x => println!("all is ok, found segment"),
+            _x => println!("all is ok, found segment"),
         }
     }
 
@@ -263,8 +263,8 @@ pub fn start_shard_workers(
 }
 
 fn assert_recordable(data: &[u8]) -> Result<(), String> {
-    let xxx = std::str::from_utf8(&data).map_err(|x| "data was not utf-8 valid".to_string())?;
-    base64::decode(xxx).map_err(|x| "input ws not base64".to_string())?;
+    let xxx = std::str::from_utf8(&data).map_err(|_x| "data was not utf-8 valid".to_string())?;
+    base64::decode(xxx).map_err(|_x| "input ws not base64".to_string())?;
     Ok(())
 }
 
@@ -329,7 +329,7 @@ pub fn handle_request(
             writer
                 .write(&Record(yyy))
                 .map_err(|x| x.to_string())
-                .map(|nothing| Response("data was written!!!".to_string()))
+                .map(|_nothing| Response("data was written!!!".to_string()))
         }
     }
 }

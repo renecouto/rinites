@@ -1,5 +1,5 @@
-use crate::shards::*;
-use crate::Response;
+
+
 use std::net::{SocketAddr, UdpSocket};
 use std::num::ParseIntError;
 use std::time::Duration;
@@ -34,7 +34,7 @@ impl UdpServer {
         let mut buf = [0; 500];
         let recv = self.socket.recv_from(&mut buf);
 
-        if let Err(e) = recv {
+        if let Err(_e) = recv {
             return None;
         }
 
@@ -44,7 +44,7 @@ impl UdpServer {
             let filled_buf = &mut buf[..number_of_bytes];
 
             let request = std::str::from_utf8(filled_buf).map_err(|x| (x.to_string(), src_addr))?;
-            let mut request_split: Vec<&str> = request.split_whitespace().collect();
+            let request_split: Vec<&str> = request.split_whitespace().collect();
             match request_split[..] {
                 ["GetShardIterator", "Latest"] => Ok((
                     Some(Request::GetShardIterator(ShardIteratorType::Latest)),
@@ -61,7 +61,7 @@ impl UdpServer {
                     Ok((Some(Request::GetRecords(shit)), src_addr))
                 }
                 ["PutRecords", base64_stuff] => match base64::decode(base64_stuff) {
-                    Err(e) => Err((
+                    Err(_e) => Err((
                         "invalid data. It must be base64 encoded".to_string(),
                         src_addr,
                     )),
