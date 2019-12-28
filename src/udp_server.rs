@@ -3,7 +3,8 @@
 use std::net::{SocketAddr, UdpSocket};
 use std::num::ParseIntError;
 use std::time::Duration;
-
+use serde_derive::{Deserialize, Serialize};
+#[derive(Serialize, Deserialize)]
 pub enum ShardIteratorType {
     Latest,
     Oldest,

@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 
 use structopt::StructOpt;
 
-use rinites::shards::{start_shard_workers, ShardDir};
+use rinites::shards::shards::{start_shard_workers, ShardDir};
 use rinites::udp_server::*;
 
 

@@ -1,13 +1,22 @@
-use tokio::io;
-use tokio::net::{TcpListener, TcpStream};
-use tokio::prelude::*;
-use tokio::prelude::stream::{SplitSink, SplitStream};
 use structopt::StructOpt;
 use std::net::SocketAddr;
-use tokio::codec::{BytesCodec, Framed, LinesCodec};
-use tokio::codec::Decoder;
-use core::borrow::BorrowMut;
-use bytes::{BytesMut, BufMut, BigEndian};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+
+use actix_web::{get, post, web, App, HttpServer, Responder, HttpRequest, HttpResponse};
+use actix_web::body::Body;
+use std::sync::{Mutex, Arc};
+use json::JsonValue;
+use serde_derive::{Deserialize, Serialize};
+
+use rinites::shards::shards::{ShardDir, ShardWriter, ShardWriter2, ShaW, ShardReader, Record, assert_recordable};
+use std::path::Path;
+use rinites::Response;
+use rinites::udp_server::ShardIteratorType;
+use rinites::shards::shard_controller::{ShardController, GetRecordsResponse, PutRecordsResponse};
+use actix_web::web::Json;
+use actix_web::Result;
+
 /// Rinites
 #[derive(StructOpt, Debug)]
 #[structopt(name = "basic")]
@@ -30,85 +39,79 @@ fn get_cli_opts() -> Opts {
     opts
 }
 
-fn handle_socket(socket: TcpStream) -> impl Future<Item=(), Error=()> + 'static + Send {
 
-    // Once we're inside this closure this represents an accepted client
-//    // from our server. The `socket` is the client connection (similar to
-//    // how the standard library operates).
-//    //
-//    // We're parsing each socket with the `BytesCodec` included in `tokio_io`,
-//    // and then we `split` each codec into the reader/writer halves.
-//    //
-//    // See https://docs.rs/tokio-codec/0.1/src/tokio_codec/bytes_codec.rs.html
-    type MyCodec = BytesCodec;
-    let framed: Framed<TcpStream, MyCodec> = MyCodec::new().framed(socket); //
-    let (writer, reader): (SplitSink<Framed<TcpStream, MyCodec>>, SplitStream<Framed<TcpStream, MyCodec>>) = framed.split();
-//                reader.
-//                let xxx = reader.and_then(|x|Ok(()));
-//    reader.and_then(|b| println!(b));
-//    let processor = writer.send_all(xxx)
-//                    ;
-//
-    let processor = reader
-//        .map(|z| Vec::from(z.as_bytes()))
-        .concat2()
-        .map(|bytes| {
-            let bytes =  std::str::from_utf8(&bytes).expect("se fodeu");
-            println!("bytes: {:?}", &bytes);
-//            let mut kk: Vec<u8> = vec![1, 2, 3];
-//            bytes.as_bytes().iter().for_each(|x| {
-//                kk.push(*x);
-//            } );
-//            kk
-//            Ok(());
 
-            let mut buf = BytesMut::with_capacity(1024);
-//            let processor = .as_bytes().to_owned();
-            buf.put("HTTP/1.1 301 Moved Permanently\n");
-            let kk = buf.freeze();
-            writer.send(kk)
-        })
-        .then(|x| {
-        println!("meucu");
-        Ok(())
-    } );
+#[get("/get-records/{shard_iterator}")]
+async fn get_records(shard_controller: web::Data<ShardController>, shit: web::Path<u64>) -> Result<Json<GetRecordsResponse>> {
 
-    processor
-//        .and_then(|bytes| {
-//            println!("bytes: {:?}", bytes);
-//            Ok(())
-//        })
-//    writer.send()).then(|X|{
-////            match result {
-////                Ok(_) => {
-////                    println!("Socket closed with result: {:?}", 1);
-////                    Ok(())
-////                },
-////                Err(ref e) => {
-//                    println!("Socket closed with result: {:?}", 2);
-//                    Ok(());
-//            ()
-////                }
-////            }
-//
-//        })
+    let result = shard_controller.get_records(shit.into_inner());
+
+    Ok(Json(result))
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[derive(Deserialize, Serialize)]
+struct PutRecordsRequest {
+    record: String,
+}
+
+#[post("/put-records")]
+async fn put_records(shard_controller: web::Data<ShardController>, body: web::Json<PutRecordsRequest>) -> Result<Json<PutRecordsResponse>> {
+    let record = Record::from_string(body.record.clone())?;
+    let result = shard_controller.put_records(record);
+    Ok(Json(result))
+}
+
+#[derive(Deserialize, Serialize)]
+struct GetShardIteratorRequest {
+    iterator_type: String
+}
+
+#[post("/get-shard-iterator")]
+async fn get_shard_iterator(shard_controller: web::Data<ShardController>, body: web::Json<GetShardIteratorRequest>) -> impl Responder {
+    let shard_dir = &shard_controller.shard_dir;
+    let res = {
+        match body.iterator_type.as_str() {
+            "Latest" => {
+                let shit = shard_controller.latest_log_offset.load(Ordering::Relaxed);
+                Response(format!("shard iterator: {}", shit))
+            },
+            "Oldest" => {
+                let shit = shard_dir.get_oldest_segment();
+
+                Response(format!("shard iterator: {}", shit))
+            }
+            _ => Response(format!("shard iterator type not supported"))
+        }
+    };
+    HttpResponse::Ok().body(res.0)
+
+}
+
+fn setup_shard_controller(opts: &Opts) -> ShardController {
+    let shard_dir = ShardDir {
+        mount_dir: Path::new(&opts.mount_path).to_path_buf(),
+    };
+    shard_dir.assert_mount_path();
+    let latest_segment = shard_dir.get_latest_segment();
+
+    let latest_segment = Arc::new(AtomicUsize::new(latest_segment as usize));
+
+    let write_lock = Mutex::new(());
+    ShardController { shard_dir, latest_log_offset: latest_segment.clone(), write_lock }
+}
+
+#[actix_rt::main]
+async fn main() -> std::io::Result<()> {
     let opts = get_cli_opts();
-    let addr = format!("{}:{}", &opts.host, opts.port).parse::<SocketAddr>()?;
-    let socket = TcpListener::bind(&addr)?;
-    println!("Listening on: {}", &addr);
+    let addr = format!("{}:{}", opts.host, opts.port);
+    let shard_controller = web::Data::new(setup_shard_controller(&opts));
 
-    let done = socket
-            .incoming()
-            .map_err(|x| println!("{}", x))
-            .for_each(move |socket| {
-                let processor = handle_socket(socket);
-                tokio::spawn(processor)
-            });
-
-    tokio::run(done);
-
-    Ok(())
+    HttpServer::new(move|| App::new()
+        .app_data(shard_controller.clone())
+        .service(get_records)
+        .service(put_records)
+        .service(get_shard_iterator))
+        .bind(addr)?
+        .start()
+        .await
 }
