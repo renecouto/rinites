@@ -56,10 +56,10 @@ impl UdpServer {
                     src_addr,
                 )),
                 ["GetRecords", x] => {
-                    let shit: u64 = x
+                    let shard_iterator: u64 = x
                         .parse()
                         .map_err(|err: ParseIntError| (err.to_string(), src_addr))?;
-                    Ok((Some(Request::GetRecords(shit)), src_addr))
+                    Ok((Some(Request::GetRecords(shard_iterator)), src_addr))
                 }
                 ["PutRecords", base64_stuff] => match base64::decode(base64_stuff) {
                     Err(_e) => Err((

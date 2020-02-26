@@ -9,7 +9,7 @@ use std::sync::{Mutex, Arc};
 use json::JsonValue;
 use serde_derive::{Deserialize, Serialize};
 
-use rinites::shards::shards::{ShardDir, ShardWriter, ShardWriter2, ShaW, ShardReader, Record, assert_recordable};
+use rinites::shards::shards::{ShardDir, ShardWriter2, ShaW, ShardReader, Record, assert_recordable};
 use std::path::Path;
 use rinites::Response;
 use rinites::udp_server::ShardIteratorType;
@@ -42,9 +42,9 @@ fn get_cli_opts() -> Opts {
 
 
 #[get("/get-records/{shard_iterator}")]
-async fn get_records(shard_controller: web::Data<ShardController>, shit: web::Path<u64>) -> Result<Json<GetRecordsResponse>> {
+async fn get_records(shard_controller: web::Data<ShardController>, shard_iterator: web::Path<u64>) -> Result<Json<GetRecordsResponse>> {
 
-    let result = shard_controller.get_records(shit.into_inner());
+    let result = shard_controller.get_records(shard_iterator.into_inner());
 
     Ok(Json(result))
 }
@@ -72,13 +72,13 @@ async fn get_shard_iterator(shard_controller: web::Data<ShardController>, body: 
     let res = {
         match body.iterator_type.as_str() {
             "Latest" => {
-                let shit = shard_controller.latest_log_offset.load(Ordering::Relaxed);
-                Response(format!("shard iterator: {}", shit))
+                let shard_iterator = shard_controller.latest_log_offset.load(Ordering::Relaxed);
+                Response(format!("shard iterator: {}", shard_iterator))
             },
             "Oldest" => {
-                let shit = shard_dir.get_oldest_segment();
+                let shard_iterator = shard_dir.get_oldest_segment();
 
-                Response(format!("shard iterator: {}", shit))
+                Response(format!("shard iterator: {}", shard_iterator))
             }
             _ => Response(format!("shard iterator type not supported"))
         }

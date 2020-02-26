@@ -1,11 +1,9 @@
 # RINITES
 
-Kinesis copy. in the present moment, it emulates a kinesis shard through a udp api. The focus of this project is to learn about low level multithreading in rust.
+This aspires to be somewhat of a AwsKinesis/Kafka copy with very few features. In the present moment, it emulates a Kinesis shard through a udp/tcp api. The focus of this project is to learn about low level multithreading in rust.
 
 # Requirements
 - Cargo https://doc.rust-lang.org/cargo/getting-started/installation.html
-
-# DO NOT USE THIS IN PROD LOLLLLLLL
 
 # Features
 
@@ -23,18 +21,40 @@ GetShardIterator <'Oldest'/'Latest'> # A shard iterator is a offset on a shard i
 GetRecords <shard-iterator> # retrieve a chunk of records beggining at the requested shard-iterator
 ```
 
-# Doing
-- Use tokio instead of my custom threadpool lol
-- Use tcp instead of udp. Udp seems useless if you want to retrieve records through multiple requests. I mean, it is technically possible, but it would be a huge hack.
+## TCP API
+
+As it emulates kinesis, there are 3 main operations: PutRecords, GetShardIterator and GetRecords. A ShardIterator is a number that points to the consumer's present position in the consumption of the stream.
+To make a GetRecords request, you must supply a ShardIterator.
+### Run
+```
+mkdir ./mount-data-here
+cargo run -- --mount_path ./mount-data-here --port 8080
+```
+
+### Put Records
+the endpoint /put-records accepts a json with the base64 encoded data you want to insert in the 'records' field
+```
+PUT_RECORDS_DATA="{\"records\":\"$(echo 'hello, world' | base64)\"}"
+curl -i localhost:8080/put-records --data $PUT_RECORDS_DATA -H 'Content-Type:application/json'
+```
+
+### Get Shard Iterator
+```
+curl -i localhost:8080/get-shard-iterator -d '{"iterator_type":"Oldest"}' -H 'Content-Type:application/json'
+```
+This should return HTTP200, and 'shard iterator: 0'
+
+### Get Records
+Using the retrieved shard iterator,
+```
+curl -i localhost:8080/get-records/<shard-iterator>
+```
 
 # TO DO
-- Tests. Don't know how to do them, since everything is IO and Rust does not let any race condition past it
-- I need some logic to index by timestamp. Maybe keep a '<log-segment>.metadata' file with creation date of something. I don't want to use the actual file's metadata because it won't work if the shard leadership is transferred (thinking about replication).
+- More tests
+- Allow getting shard iterator by timestamp
 - Delete old log-segments. This might depend on timestamp or on max offset.
 - multiple shards (list shards, add shards)
 - Replication
 - Clustering etc
 - remove/merge shards?
-
-# License
-I have no idea, but I guess MIT????

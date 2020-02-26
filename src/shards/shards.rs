@@ -218,7 +218,7 @@ impl ShardDir {
             .expect("not in shard style")
     }
 
-    pub fn find_belonging_segment(&self, shit: u64) -> (SegmentId, ShardOffset) {
+    pub fn find_belonging_segment(&self, shard_iterator: u64) -> (SegmentId, ShardOffset) {
         let paths = fs::read_dir(&self.mount_dir).unwrap();
         dbg!(&paths);
         let mut candidate_shard_id: u64 = 0;
@@ -227,7 +227,7 @@ impl ShardDir {
         for p in paths.map(|x| x.unwrap()) {
             dbg!(&p);
             let n: i64 = p.file_name().into_string().unwrap().parse().unwrap();
-            let diff = (shit as i64) - n;
+            let diff = (shard_iterator as i64) - n;
             dbg!(diff);
             if diff >= 0 && diff <= candidate_shard_id_offset {
                 candidate_shard_id = n as u64;
@@ -349,9 +349,9 @@ pub fn handle_request(
     request: Request,
 ) -> Result<Response, failure::Error> {
     match request {
-        Request::GetRecords(shit) => {
+        Request::GetRecords(shard_iterator) => {
             let shard_dir = shard_dir.clone();
-            let (shard_id, offset) = shard_dir.find_belonging_segment(shit);
+            let (shard_id, offset) = shard_dir.find_belonging_segment(shard_iterator);
 
             let mut reader: ShardReader = ShardReader {
                 segment_id: shard_id,
@@ -381,13 +381,13 @@ pub fn handle_request(
             }
         }
         Request::GetShardIterator(ShardIteratorType::Latest) => {
-            let shit = shard_dir.get_latest_segment();
-            let result = Response(format!("shard iterator: {}", shit));
+            let shard_iterator = shard_dir.get_latest_segment();
+            let result = Response(format!("shard iterator: {}", shard_iterator));
             Ok(result)
         }
         Request::GetShardIterator(ShardIteratorType::Oldest) => {
-            let shit = shard_dir.get_oldest_segment();
-            let result = Response(format!("shard iterator: {}", shit));
+            let shard_iterator = shard_dir.get_oldest_segment();
+            let result = Response(format!("shard iterator: {}", shard_iterator));
             Ok(result)
         }
         Request::PutRecords(record) => {
