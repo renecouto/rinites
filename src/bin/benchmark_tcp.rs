@@ -1,9 +1,10 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, SystemTime};
+
 use actix_web::client::{Client, ClientResponse};
 use futures;
-use std::time::{Duration, SystemTime};
-use rand::{thread_rng, Rng};
+use rand::{Rng, thread_rng};
 use rand::distributions::Alphanumeric;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 //use futures_util::future::future::FutureExt;
 #[actix_rt::main]
@@ -18,26 +19,14 @@ async fn main() {
     let n = 1000;
     // Create request builder and send request
     let req = || {
-//        let stuff = r#"{"record": ""#;
-//        let stuff2 = r#""}"#;
-//        let random_data =  {
-//            let rand_string: String = thread_rng()
-//                .sample_iter(&Alphanumeric)
-//                .take(s)
-//                .collect();
-//            base64::encode(rand_string.as_bytes())
-//        };
         client.post("http://127.0.0.1:2301/put-records")
             .header("User-Agent", "Actix-web")
             .header("Content-Type", "application/json")
             .timeout(Duration::from_secs(30))
             .send_body(data)
-//        format!("{}{}{}", stuff, random_data, stuff2))
-
     };
 
     let now = SystemTime::now();
-//    let mut kkk = Vec::new();
     let c: AtomicUsize = AtomicUsize::new(0);
     let errors: AtomicUsize = AtomicUsize::new(0);
     for _ in 0..(n/z) {
@@ -62,18 +51,10 @@ async fn main() {
         }
     }
 
-//    let res = futures::future::join_all(kkk).await;
-
-//    dbg!(res);
     dbg!(c.load(Ordering::Relaxed));
     dbg!(errors.load(Ordering::Relaxed));
     let end = now.elapsed().expect("se fodeu 2").as_millis();
     println!("it took {} ms to send {} bytes per request in {} request, totaling {} bytes and {} bytes/sec", end, s, n, n*s, (n as f64 *s as f64)/(end as f64 / 1000.0));
 
 
-
-
-                 // <- Send http request
-
-//    println!("Response: {:?}", response);
 }

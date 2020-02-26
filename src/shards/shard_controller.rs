@@ -1,18 +1,16 @@
-use structopt::StructOpt;
 use std::net::SocketAddr;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-
-use actix_web::{get, post, web, App, HttpServer, Responder, HttpRequest, HttpResponse};
+use actix_web::{App, get, HttpRequest, HttpResponse, HttpServer, post, Responder, web};
 use actix_web::body::Body;
-use std::sync::{Mutex, Arc};
 use json::JsonValue;
 use serde_derive::{Deserialize, Serialize};
+use structopt::StructOpt;
 
-use crate::shards::shards::{ShardDir, ShardWriter, ShardWriter2, ShaW, ShardReader, Record, assert_recordable};
-use std::path::Path;
 use crate::Response;
-use crate::udp_server::ShardIteratorType;
+use crate::shards::shards::{assert_recordable, Record, ShardDir, ShardIteratorType, ShardReader, ShardWriter, ShaW};
 
 pub struct ShardController {
     pub shard_dir: ShardDir,
@@ -60,7 +58,7 @@ impl ShardController {
 
         let latest_segment = self.shard_dir.get_latest_segment();
         let latest_shard_offset = self.shard_dir.get_end_offset(latest_segment);
-        let mut shard_writer = ShardWriter2 {
+        let mut shard_writer = ShardWriter {
             latest_segment: self.latest_log_offset.load(Ordering::Relaxed) as u64,
             shard_dir: self.shard_dir.clone(),
             offset: latest_shard_offset,
@@ -78,20 +76,19 @@ impl ShardController {
 
 #[cfg(test)]
 mod tests {
-
-    use crate::shards::shards::{ShardDir, ShardWriter, ShardWriter2, Record, ShardReader, ShaW};
-    use std::{env, time, thread, panic};
-    use std::fs::{File, create_dir};
-    use std::path::PathBuf;
-    use std::io::prelude::*;
-    use std::sync::{Arc, Mutex};
-
+    use std::{env, panic, thread, time};
+    use std::fs::{create_dir, File};
     use std::io::BufReader;
+    use std::io::prelude::*;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use rand::{thread_rng, Rng};
-    use rand::distributions::Alphanumeric;
-    use crate::shards::shard_controller::{ShardController, GetRecordsResponse, PutRecordsResponse};
 
+    use rand::{Rng, thread_rng};
+    use rand::distributions::Alphanumeric;
+
+    use crate::shards::shard_controller::{GetRecordsResponse, PutRecordsResponse, ShardController};
+    use crate::shards::shards::{Record, ShardDir, ShardReader, ShardWriter, ShaW};
 
     fn with_tmp_dir<T>(test: T) -> ()
         where T: FnOnce(PathBuf) -> () + panic::UnwindSafe

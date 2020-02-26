@@ -1,18 +1,31 @@
-use crate::udp_server::{Request, ShardIteratorType};
-use crate::Response;
+use std::{fs, thread};
 use std::fs::{DirEntry, File, OpenOptions};
+use std::io::{BufRead, Seek, Write};
 use std::io::BufReader;
 use std::io::SeekFrom;
-use std::io::{BufRead, Seek, Write};
 use std::net::SocketAddr;
-use std::path::{PathBuf};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::{fs, thread};
-//use failure::Error;
+
 use serde_derive::{Deserialize, Serialize};
+
+use crate::Response;
+
+#[derive(Serialize, Deserialize)]
+pub enum ShardIteratorType {
+    Latest,
+    Oldest,
+}
+
+pub enum Request {
+    GetShardIterator(ShardIteratorType),
+    GetRecords(u64),
+    PutRecords(Vec<u8>),
+}
+
 
 #[derive(Deserialize, Serialize)]
 #[derive(Debug, Clone, PartialEq)]
@@ -42,13 +55,6 @@ pub type SegmentId = u64;
 
 type ShardOffset = u64;
 
-pub struct ShardWriter {
-    pub latest_segment: Arc<AtomicUsize>,
-    pub shard_dir: ShardDir,
-    pub offset: ShardOffset,
-    pub max_segment_size: u64,
-}
-
 pub trait ShaW {
     fn write(&mut self, record: Record) -> std::io::Result<()>;
 }
@@ -59,46 +65,14 @@ impl ShaW for ShardWriter {
     }
 }
 
-impl ShaW for ShardWriter2 {
-    fn write(& mut self, record: Record) -> std::io::Result<()> {
-        self.writez(record)
-    }
-}
-
-impl ShardWriter {
-    fn writez(&mut self, record: Record) -> std::io::Result<()> {
-        let mut file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .append(true)
-            .open(
-                self.shard_dir
-                    .path_to_segment(self.latest_segment.load(Ordering::Relaxed) as u64),
-            )
-            .expect("could not open file to append");
-
-        let written = file.write(&record.serialized())?;
-        self.offset += written as u64;
-        if self.offset > self.max_segment_size {
-            let old_size = self.latest_segment.load(Ordering::Relaxed);
-            self.latest_segment
-                .store(self.offset as usize + old_size, Ordering::Relaxed);
-            self.offset = 0;
-            println!("releasing lock for new partition");
-        }
-        Ok(())
-    }
-}
-
-pub struct ShardWriter2 {
+pub struct ShardWriter {
     pub latest_segment: u64,
     pub shard_dir: ShardDir,
     pub offset: ShardOffset,
     pub max_segment_size: u64,
 }
 
-impl ShardWriter2 {
+impl ShardWriter {
     fn writez(&mut self, record: Record) -> std::io::Result<()> {
         let mut file = OpenOptions::new()
             .create(true)
@@ -280,143 +254,28 @@ impl ShardDir {
     }
 }
 
-pub fn start_shard_workers(
-    shard_dir: ShardDir,
-    task_rx: Arc<Mutex<Receiver<(Request, SocketAddr)>>>,
-    response_tx: Sender<(Response, SocketAddr)>,
-) -> Vec<JoinHandle<()>> {
-    shard_dir.assert_mount_path();
-    let latest_shard = shard_dir.get_latest_segment();
-    let latest_shard_offset = shard_dir.get_end_offset(latest_shard);
-
-    let latest_segment: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(latest_shard as usize));
-    let shard_writer = ShardWriter {
-        latest_segment: latest_segment.clone(),
-        shard_dir: shard_dir.clone(),
-        offset: latest_shard_offset,
-        max_segment_size: 100,
-    };
-    let shard_writer = Arc::new(Mutex::new(shard_writer));
-
-    let mut threads = Vec::new();
-    for n in 0..8 {
-        let shard_writer = shard_writer.clone();
-        let latest_segment = latest_segment.clone();
-
-        let task_rx = task_rx.clone();
-        let response_tx = response_tx.clone();
-        let shard_dir = shard_dir.clone();
-        let x = thread::spawn(move || {
-            println!("started thread {}", n);
-            loop {
-                let (req, addr) = {
-                    let rx = task_rx.lock().unwrap();
-                    println!("got rx lock in thread {}", n);
-                    rx.recv().unwrap()
-                };
-
-                println!("got req in thread {}", n);
-                let response =
-                    handle_request(&shard_writer, &latest_segment, &shard_dir, req).unwrap();
-                dbg!(&response);
-                println!("sending from thread {}", n);
-                if let Err(e) = response_tx.send((response, addr)) {
-                    println!("got err: {:?}", e);
-                }
-
-                //                println!("waiting for udp lock on thead {}", n);
-            }
-        });
-        threads.push(x);
-    }
-    threads
-}
-
 pub fn assert_recordable(data: &[u8]) -> Result<(), failure::Error> {
     let xxx = std::str::from_utf8(&data)?;
     base64::decode(xxx)?;
     Ok(())
 }
 
-/// last_shard_id and last_shard_id_offset as atomic OR last_sequence_number as atomic.
-/// i dont need lock on read, but i have to keep track of the offset of the last stable line. stable meaning it is not being written to
-/// benchmark
-/// use arc for shard dir
-pub fn handle_request(
-    shard_writer: &Arc<Mutex<ShardWriter>>,
-    latest_segment: &Arc<AtomicUsize>,
-    shard_dir: &ShardDir,
-    request: Request,
-) -> Result<Response, failure::Error> {
-    match request {
-        Request::GetRecords(shard_iterator) => {
-            let shard_dir = shard_dir.clone();
-            let (shard_id, offset) = shard_dir.find_belonging_segment(shard_iterator);
-
-            let mut reader: ShardReader = ShardReader {
-                segment_id: shard_id,
-                offset,
-                chunk_size: 10,
-                shard_dir,
-                latest_log_offset: latest_segment.load(Ordering::Relaxed),
-            };
-            let records: Vec<Record> = reader.read().unwrap();
-            println!("read {} records", records.len());
-
-            if records.len() == 0 {
-                Ok(Response(format!(
-                    "no more records remaining. offset was: {}",
-                    reader.offset
-                )))
-            } else {
-                let text: Vec<&str> = records
-                    .iter()
-                    .map(|r| std::str::from_utf8(&r.0).unwrap())
-                    .collect();
-                Ok(Response(format!(
-                    "next shard iterator: {}, records: {:?}",
-                    reader.offset + shard_id,
-                    text
-                )))
-            }
-        }
-        Request::GetShardIterator(ShardIteratorType::Latest) => {
-            let shard_iterator = shard_dir.get_latest_segment();
-            let result = Response(format!("shard iterator: {}", shard_iterator));
-            Ok(result)
-        }
-        Request::GetShardIterator(ShardIteratorType::Oldest) => {
-            let shard_iterator = shard_dir.get_oldest_segment();
-            let result = Response(format!("shard iterator: {}", shard_iterator));
-            Ok(result)
-        }
-        Request::PutRecords(record) => {
-            assert_recordable(&record)?;
-            let mut writer = shard_writer.lock().unwrap();
-            writer
-                .write(Record(record))
-                .map(|_nothing| Response("data was written!!!".to_string()))
-                .map_err(|e| failure::Error::from(e))
-        }
-    }
-}
 
 
 #[cfg(test)]
 mod tests {
-    use crate::shards::shards::{ShardDir, ShardWriter, ShardWriter2, Record, ShardReader, ShaW};
-    use std::{env, time, thread, panic};
-    use std::fs::{File, create_dir};
-    use std::path::PathBuf;
-    use std::io::prelude::*;
-    use std::sync::Arc;
-
+    use std::{env, panic, thread, time};
+    use std::fs::{create_dir, File};
     use std::io::BufReader;
+    use std::io::prelude::*;
+    use std::path::PathBuf;
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use rand::{thread_rng, Rng};
+
+    use rand::{Rng, thread_rng};
     use rand::distributions::Alphanumeric;
 
-
+    use crate::shards::shards::{Record, ShardDir, ShardReader, ShardWriter, ShaW};
 
     fn with_tmp_dir<T>(test: T) -> ()
         where T: FnOnce(PathBuf) -> () + panic::UnwindSafe
@@ -501,9 +360,8 @@ mod tests {
 
             let latest_segment = shard_dir.get_latest_segment();
             let latest_shard_offset = shard_dir.get_end_offset(latest_segment);
-            let latest_segment = Arc::new(AtomicUsize::new(latest_segment as usize));
             let mut shard_writer = ShardWriter {
-                latest_segment: latest_segment.clone(),
+                latest_segment: latest_segment,
                 shard_dir: shard_dir.clone(),
                 offset: latest_shard_offset,
                 max_segment_size: 1000000,
@@ -513,7 +371,7 @@ mod tests {
 
             shard_writer.write(record);
 
-            let path = mount_dir.join(shard_dir.path_to_segment(shard_writer.latest_segment.load(Ordering::Relaxed) as u64));
+            let path = mount_dir.join(shard_dir.path_to_segment(shard_writer.latest_segment));
             let expected = format!("{}\n", &string_data);
             let res = {
                 let mut f = File::open(path).unwrap();
@@ -539,9 +397,8 @@ mod tests {
 
             let original_latest_segment = shard_dir.get_latest_segment();
             let latest_shard_offset = shard_dir.get_end_offset(original_latest_segment);
-            let latest_segment = Arc::new(AtomicUsize::new(original_latest_segment as usize));
             let mut shard_writer = ShardWriter {
-                latest_segment: latest_segment.clone(),
+                latest_segment: latest_shard_offset,
                 shard_dir: shard_dir.clone(),
                 offset: latest_shard_offset,
                 max_segment_size: 10,
@@ -594,9 +451,8 @@ mod tests {
 
             let original_latest_segment = shard_dir.get_latest_segment();
             let latest_shard_offset = shard_dir.get_end_offset(original_latest_segment);
-            let latest_segment = Arc::new(AtomicUsize::new(original_latest_segment as usize));
             let mut shard_writer = ShardWriter {
-                latest_segment: latest_segment.clone(),
+                latest_segment: latest_shard_offset,
                 shard_dir: shard_dir.clone(),
                 offset: latest_shard_offset,
                 max_segment_size: 100,

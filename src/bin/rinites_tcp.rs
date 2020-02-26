@@ -1,21 +1,19 @@
-use structopt::StructOpt;
 use std::net::SocketAddr;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-
-use actix_web::{get, post, web, App, HttpServer, Responder, HttpRequest, HttpResponse};
+use actix_web::{App, get, HttpRequest, HttpResponse, HttpServer, post, Responder, web};
 use actix_web::body::Body;
-use std::sync::{Mutex, Arc};
+use actix_web::Result;
+use actix_web::web::Json;
 use json::JsonValue;
 use serde_derive::{Deserialize, Serialize};
+use structopt::StructOpt;
 
-use rinites::shards::shards::{ShardDir, ShardWriter2, ShaW, ShardReader, Record, assert_recordable};
-use std::path::Path;
 use rinites::Response;
-use rinites::udp_server::ShardIteratorType;
-use rinites::shards::shard_controller::{ShardController, GetRecordsResponse, PutRecordsResponse};
-use actix_web::web::Json;
-use actix_web::Result;
+use rinites::shards::shard_controller::{GetRecordsResponse, PutRecordsResponse, ShardController};
+use rinites::shards::shards::{assert_recordable, Record, ShardDir, ShardReader, ShardWriter, ShaW};
 
 /// Rinites
 #[derive(StructOpt, Debug)]
