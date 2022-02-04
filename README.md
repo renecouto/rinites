@@ -1,4 +1,4 @@
-# RINITES
+ TES
 
 This aspires to be somewhat of a AwsKinesis/Kafka copy with very few features. In the present moment, it emulates a Kinesis shard through a http api. The focus of this project is to learn about low level multithreading in rust.
 
